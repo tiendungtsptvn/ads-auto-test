@@ -1,0 +1,11 @@
+.DS_Store
+node_modules/
+.env
+docs/*.xlsx
+docs/*.xlsm
+docs/*.txt
+*.xlsx
+*.xlsm
+ads-report-*.md
+rc-compare-*.md
+.claude/

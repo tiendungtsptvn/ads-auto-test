@@ -1,0 +1,16 @@
+node_modules/
+.env
+*.log
+.DS_Store
+
+# Report sinh ra, không commit (mvp.md, ghi chú cho session triển khai)
+ads-report-*.md
+rc-compare-*.md
+
+# File mẫu thật của tester, không commit và không dùng làm fixture
+*.xlsx
+*.xlsm
+logcat*.txt
+log cat*.txt
+
+# dist/ được commit để clone hoặc copy folder là chạy được (D-062); không ignore

@@ -1,0 +1,45 @@
+{
+    "version": 1,
+    "comment": "Danh sách case đặc biệt (D-075, D-077): ad thuộc case này không áp dụng rule HF thông thường và luôn ra CẦN XEM. Nhận diện theo resource name, enable key hoặc Ads name (so khớp không phân biệt hoa thường; dấu * ở cuối là khớp tiền tố). enableKeys (tùy chọn) là key bật/tắt ad của case khi kịch bản không ghi key (MIX tắt bằng fo_inter_splash, D-070); relatedKeys (tùy chọn) là key liên quan chỉ để hiển thị giá trị trong log. Dev bổ sung dần. acceptanceSection là tên mục tương ứng ở cột C của sheet đang hiển thị trong file nghiệm thu lib (đã đối chiếu với file mẫu Nghiệm thu tích hợp lib Tera), null nếu chưa xác nhận.",
+    "cases": [
+        {
+            "name": "MIX",
+            "identifiers": [
+                "fo_na_mix_after_01",
+                "fo_na_mix_after_01_2"
+            ],
+            "acceptanceSection": "Ad native splash",
+            "enableKeys": [
+                "fo_inter_splash"
+            ],
+            "relatedKeys": [
+                "fo_logic_ad_launcher"
+            ]
+        },
+        {
+            "name": "Native Preparing",
+            "identifiers": [
+                "fo_native_full_preparing_data",
+                "fo_native_full_preparing_data_2ID"
+            ],
+            "acceptanceSection": "Native Preparing"
+        },
+        {
+            "name": "Ad resume",
+            "identifiers": [
+                "enable_resume",
+                "resume_2ID",
+                "fo_ad_open_resume*",
+                "fo_ad_native_resume*"
+            ],
+            "acceptanceSection": "Ad resume"
+        },
+        {
+            "name": "Logic tăng impression",
+            "identifiers": [
+                "fo_logic_inter_splash_inc_impression"
+            ],
+            "acceptanceSection": "Logic tăng impression"
+        }
+    ]
+}
