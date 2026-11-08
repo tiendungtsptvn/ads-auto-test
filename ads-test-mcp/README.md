@@ -4,6 +4,8 @@ MCP server local (stdio, TypeScript) hỗ trợ tester kiểm tra ads Android. T
 
 **Trạng thái: M1 (đọc logcat), M2 (đọc kịch bản ads), M3 (verify) và M4 (key bật/tắt từ Firebase).** Có 5 tool: `parse_logcat`, `search_logcat`, `read_ad_script`, `verify_ads`, `map_remote_keys`. M4 chưa kiểm chứng trên Windows và trên bộ file của app thuộc project thật (Q-074); phần so giá trị log với console bị bỏ (D-101). Mọi tool đều gọi được cả qua MCP lẫn qua `cli.js` (D-080), và `cli.js` đi qua đúng server MCP (D-082).
 
+Hướng dẫn từng bước cho tester (chuẩn bị, thông tin cần đưa, cách duyệt bảng mapping, đọc kết quả, lỗi thường gặp): [HUONG-DAN-TESTER.md](HUONG-DAN-TESTER.md).
+
 ## Tool
 
 | Tool | Đầu vào | Trả về |
