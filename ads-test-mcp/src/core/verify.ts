@@ -2,6 +2,8 @@ import { type AdEvent } from './ad-events.js';
 import { type AdScript, type AdScriptRow } from './ad-script.js';
 import { type Acceptance, type AcceptanceExcerpt, type KeyLookup } from './acceptance.js';
 import { type ConfigSnapshot } from './config.js';
+import { consolePrefs, manualKeys, type RowKeyMap } from './key-map.js';
+import { describeConsoleValue, type ConsoleConfig } from './remote-config.js';
 import { type LoadedLog } from './summary.js';
 
 /**
@@ -26,7 +28,7 @@ export interface Check {
 export interface KeyValue {
   key: string;
   value: string | null;
-  source: 'prefs' | 'checklist' | null;
+  source: 'prefs' | 'checklist' | 'console' | null;
 }
 
 export interface SpecialDetail {
@@ -89,6 +91,14 @@ export interface LogWarning {
   rows: Array<{ row: number; phase: string; adsName: string }>;
 }
 
+/** Nguồn trạng thái bật/tắt khi đọc từ console (M4, D-097). */
+export interface ConsoleInfo {
+  projectId: string;
+  version: string;
+  condition: string;
+  templateVersion: { number: string; updateTime: string } | null;
+}
+
 export interface VerifyResult {
   rows: RowVerdict[];
   extras: ExtraId[];
@@ -96,6 +106,9 @@ export interface VerifyResult {
   keyLookups: KeyLookupNote[];
   logWarnings: LogWarning[];
   notes: string[];
+  /** Có khi trạng thái key lấy từ console (M4). */
+  console?: ConsoleInfo;
+  keyMap?: RowKeyMap[];
 }
 
 export interface VerifyInput {
@@ -103,6 +116,12 @@ export interface VerifyInput {
   log: LoadedLog;
   /** Có file nghiệm thu hay không; `acceptance` chỉ có khi đã đọc được. */
   acceptance?: Acceptance;
+  /**
+   * Remote Config trên console và bảng mapping key đã duyệt (M4). Khi có thì trạng thái bật/tắt lấy từ console
+   * thay cho khối Remote FO Prefs của log (D-097, D-101).
+   */
+  console?: ConsoleConfig;
+  keyMap?: RowKeyMap[];
 }
 
 const AD_ID_RE = /^ca-app-pub-\d+\/\d+$/;
@@ -146,6 +165,8 @@ interface RowKeys {
   complete: boolean;
   /** Lý do chưa biết key (để ghi vào NA), không đoán (D-083). */
   missing: string[];
+  /** Key có giá trị không phải true/false trên console: test thủ công (D-099). */
+  manual?: string[];
 }
 
 /** Bật nếu có key = true; tắt nếu đã biết đủ key và mọi key đều = false. */
@@ -176,9 +197,9 @@ function snapshotAt(snaps: readonly ConfigSnapshot[], time: string): ConfigSnaps
 }
 
 /** Trạng thái qua mọi lần in CONFIG: chỉ kết luận khi mọi lần đều như nhau. */
-function overallState(stateAt: (prefs: Record<string, string>) => KeyState, snaps: readonly ConfigSnapshot[]): KeyState {
-  if (snaps.length === 0) return 'unknown';
-  const states = snaps.map((s) => stateAt(s.prefs));
+function overallState(stateAt: (prefs: Record<string, string>) => KeyState, prefsList: ReadonlyArray<Record<string, string>>): KeyState {
+  if (prefsList.length === 0) return 'unknown';
+  const states = prefsList.map(stateAt);
   if (states.every((s) => s === 'disabled')) return 'disabled';
   if (states.every((s) => s === 'enabled')) return 'enabled';
   return 'unknown';
@@ -292,9 +313,15 @@ export function highFloorViolations(hf: readonly AdEvent[], normal: readonly AdE
 // ------------------------------------------------------------ đối chiếu chính
 
 export function verifyAds(input: VerifyInput): VerifyResult {
-  const { script, log, acceptance } = input;
+  const { script, log, acceptance, console: cfg } = input;
   const snaps = log.config.snapshots;
   const latest = snaps[snaps.length - 1];
+  // Nguồn trạng thái bật/tắt: console (cố định trong cả lần test) hoặc các lần in CONFIG của log
+  const fromConsole = cfg !== undefined;
+  const cPrefs = cfg ? consolePrefs(cfg) : undefined;
+  const prefsList: Array<Record<string, string>> = cPrefs ? [cPrefs] : snaps.map((s) => s.prefs);
+  const prefsAt = (time: string): Record<string, string> | undefined => cPrefs ?? snapshotAt(snaps, time)?.prefs;
+  const prefsLabel = cfg ? `console (condition ${cfg.condition} hoặc default)` : 'Remote FO Prefs của log';
 
   const byId = new Map<string, AdEvent[]>();
   for (const ev of log.ads.events) {
@@ -308,7 +335,20 @@ export function verifyAds(input: VerifyInput): VerifyResult {
   // ---- key bật/tắt của từng dòng; dòng có resource mà không ghi key thì tra file nghiệm thu (D-083)
   const keyLookups: KeyLookupNote[] = [];
   const rowKeys = new Map<number, RowKeys>();
+  const mapByRow = new Map((input.keyMap ?? []).map((m) => [m.row, m]));
   for (const row of script.rows) {
+    if (fromConsole) {
+      // M4: key lấy từ bảng mapping đã duyệt (D-098, D-104)
+      const m = mapByRow.get(row.row);
+      const manual = m ? manualKeys(m) : [];
+      rowKeys.set(row.row, {
+        keys: m ? m.keys.map((k) => k.key) : [],
+        complete: m ? m.complete && manual.length === 0 && m.keys.length > 0 : false,
+        missing: m ? (m.keys.length === 0 && m.notes.length === 0 ? ['chưa có key trong bảng mapping'] : m.notes) : ['dòng không có trong bảng mapping'],
+        manual,
+      });
+      continue;
+    }
     const extra = row.special?.enableKeys ?? [];
     let rk: RowKeys;
     if (row.enableKeySource === 'sheet') {
@@ -345,8 +385,8 @@ export function verifyAds(input: VerifyInput): VerifyResult {
   }
   const idStateAt = (id: string, prefs: Record<string, string> | undefined): KeyState =>
     combine((rowsById.get(id) ?? []).map((r) => keyState(keysOf(r), prefs)));
-  const idOverall = (id: string): KeyState => overallState((p) => idStateAt(id, p), snaps);
-  const rowOverall = (row: AdScriptRow): KeyState => overallState((p) => keyState(keysOf(row), p), snaps);
+  const idOverall = (id: string): KeyState => overallState((p) => idStateAt(id, p), prefsList);
+  const rowOverall = (row: AdScriptRow): KeyState => overallState((p) => keyState(keysOf(row), p), prefsList);
   const sharedWith = (row: AdScriptRow): number[] =>
     (rowsById.get(row.adsId) ?? []).filter((r) => r.row !== row.row).map((r) => r.row);
 
@@ -390,14 +430,17 @@ export function verifyAds(input: VerifyInput): VerifyResult {
       const c = (k: AdEvent['kind']) => evs.filter((e) => e.kind === k).length;
       return { ...base, status: 'OK', message: `có trong log: ${c('load_start')} lần load, ${c('load_fail')} fail, ${c('show')} show` };
     }
-    const { keys, missing } = keysOf(row);
+    const { keys, missing, manual = [] } = keysOf(row);
     if (idOverall(row.adsId) === 'disabled') {
-      return { ...base, status: 'OK', message: `vắng mặt đúng vì key ${keys.join(', ')} = false (D-073)` };
+      return { ...base, status: 'OK', message: `vắng mặt đúng vì key ${keys.join(', ')} = false (${fromConsole ? 'console, D-102' : 'D-073'})` };
     }
     // D-065: vắng mặt là FAIL; gợi ý thêm vì D-073 cho phép vắng mặt khi key = false
     const state = rowOverall(row);
+    if (manual.length > 0 && state !== 'enabled') {
+      return { ...base, status: 'REVIEW', message: `không thấy trong log; key ${manual.join(', ')} không phải true/false, test thủ công (D-099)` };
+    }
     const hint =
-      row.enableKeySource === 'ads_name'
+      !fromConsole && row.enableKeySource === 'ads_name'
         ? ' (key ad in-app chưa biết, cần console M4: nếu key = false thì vắng mặt là đúng)'
         : keys.length === 0
           ? ` (${missing[0] ?? 'kịch bản không ghi key bật/tắt'})`
@@ -405,7 +448,7 @@ export function verifyAds(input: VerifyInput): VerifyResult {
             ? ` (key ${keys.join(', ')} = true)`
             : state === 'disabled'
               ? ` (key ${keys.join(', ')} = false nhưng ID dùng chung với dòng ${sharedWith(row).join(', ')} chưa tắt, D-088)`
-              : ` (chưa chắc key ${keys.join(', ')} bật hay tắt trong log${missing.length > 0 ? `; ${missing[0]}` : ''})`;
+              : ` (chưa chắc key ${keys.join(', ')} bật hay tắt trong ${fromConsole ? 'console' : 'log'}${missing.length > 0 ? `; ${missing[0]}` : ''})`;
     return { ...base, status: 'FAIL', message: `không thấy trong log${hint}` };
   };
 
@@ -448,26 +491,31 @@ export function verifyAds(input: VerifyInput): VerifyResult {
         ...base,
         status: 'NA',
         message:
-          row.enableKeySource === 'ads_name'
+          !fromConsole && row.enableKeySource === 'ads_name'
             ? 'chưa kiểm, cần console (key ad in-app lấy từ Firebase, M4)'
             : (rk.missing.join('; ') || 'kịch bản không ghi key bật/tắt'),
       };
     }
-    if (!keys.some((k) => snaps.some((s) => k in s.prefs))) {
-      return { ...base, status: 'NA', message: `key ${keys.join(', ')} không có trong Remote FO Prefs của log` };
+    if (!keys.some((k) => prefsList.some((p) => k in p))) {
+      return {
+        ...base,
+        status: 'NA',
+        message: rk.manual && rk.manual.length > 0 ? `key ${rk.manual.join(', ')} không phải true/false, test thủ công (D-099)` : `key ${keys.join(', ')} không có trong ${prefsLabel}`,
+      };
     }
     // D-085: key = false thì ID không được load và không được show; trạng thái gộp theo ID (D-088)
     const violations = evs
       .filter((ev) => ev.kind === 'load_start' || ev.kind === 'show')
-      .filter((ev) => idStateAt(row.adsId, snapshotAt(snaps, ev.time)?.prefs) === 'disabled')
+      .filter((ev) => idStateAt(row.adsId, prefsAt(ev.time)) === 'disabled')
       .map((ev) => `${ev.kind === 'show' ? 'show' : 'load'} lúc ${fmt(ev)} khi key ${keys.join(', ')} = false`);
     if (violations.length > 0) {
       return { ...base, status: 'FAIL', message: `key ${keys.join(', ')} = false nhưng ID vẫn được load hoặc show (${violations.length} lần)`, evidence: sampleEvidence(violations) };
     }
-    if (!rk.complete && !snaps.some((s) => keyState(rk, s.prefs) === 'enabled')) {
+    if (!rk.complete && !prefsList.some((p) => keyState(rk, p) === 'enabled')) {
       return { ...base, status: 'NA', message: `chưa đủ key để kết luận: ${rk.missing.join('; ')}` };
     }
-    const shown = keys.map((k) => `${k}=${latest?.prefs[k] ?? '?'}`).join(', ');
+    const lastPrefs = prefsList[prefsList.length - 1];
+    const shown = keys.map((k) => `${k}=${lastPrefs?.[k] ?? '?'}`).join(', ');
     const shared =
       rowOverall(row) === 'disabled' && idOverall(row.adsId) !== 'disabled'
         ? `; key tắt nhưng ID dùng chung với dòng ${sharedWith(row).join(', ')} chưa tắt nên không kết luận theo dòng này (D-088)`
@@ -528,7 +576,7 @@ export function verifyAds(input: VerifyInput): VerifyResult {
             ? { ...base, status: 'OK', message: `chỉ ${off === hf ? 'ad thường' : 'HF'} bật, ${offName} (key false) đúng là không load và không show (${pairText})` }
             : { ...base, status: 'FAIL', message: `${offName} có key = false nhưng vẫn được load hoặc show (${pairText})`, evidence: sampleEvidence(violations) };
       } else {
-        const inApp = hf.enableKeySource === 'ads_name' || normal.enableKeySource === 'ads_name';
+        const inApp = !fromConsole && (hf.enableKeySource === 'ads_name' || normal.enableKeySource === 'ads_name');
         const missing = [...keysOf(hf).missing, ...keysOf(normal).missing];
         check = {
           ...base,
@@ -537,7 +585,9 @@ export function verifyAds(input: VerifyInput): VerifyResult {
             ? 'chưa kiểm, cần console (key ad in-app lấy từ Firebase, M4)'
             : missing.length > 0
               ? `chưa biết key bật/tắt của cặp: ${missing.join('; ')}`
-              : 'chưa biết key bật/tắt của cặp (không có trong Remote FO Prefs của log, hoặc đổi giữa các lần in CONFIG)',
+              : fromConsole
+                ? 'chưa biết key bật/tắt của cặp (key không có trên console)'
+                : 'chưa biết key bật/tắt của cặp (không có trong Remote FO Prefs của log, hoặc đổi giữa các lần in CONFIG)',
         };
       }
     }
@@ -558,7 +608,7 @@ export function verifyAds(input: VerifyInput): VerifyResult {
   // ---- chốt trạng thái; case đặc biệt luôn là CẦN XEM (D-075)
   for (const v of rows) {
     if (v.row.special) {
-      v.special = buildSpecial(v, script, snaps, eventsOf, acceptance);
+      v.special = buildSpecial(v, script, snaps, eventsOf, acceptance, cfg);
       v.status = 'REVIEW';
     } else {
       v.status = worst(v.checks.map((c) => c.status));
@@ -601,7 +651,13 @@ export function verifyAds(input: VerifyInput): VerifyResult {
     pairs,
     keyLookups,
     logWarnings,
-    notes: buildNotes(script, log, rows, acceptance, keyLookups, logWarnings, rowKeys),
+    notes: buildNotes(script, log, rows, acceptance, keyLookups, logWarnings, rowKeys, cfg),
+    ...(cfg
+      ? {
+          console: { projectId: cfg.projectId, version: cfg.version, condition: cfg.condition, templateVersion: cfg.templateVersion },
+          keyMap: input.keyMap ?? [],
+        }
+      : {}),
   };
 }
 
@@ -613,6 +669,7 @@ function buildSpecial(
   snaps: readonly ConfigSnapshot[],
   eventsOf: (id: string) => AdEvent[],
   acceptance: Acceptance | undefined,
+  cfg: ConsoleConfig | undefined,
 ): SpecialDetail {
   const row = v.row;
   const sp = row.special!;
@@ -639,6 +696,8 @@ function buildSpecial(
     ...sp.identifiers.filter((i) => !i.endsWith('*')),
   ];
   const keyValues: KeyValue[] = [...new Set(names)].map((key) => {
+    const cv = cfg?.values.get(key.toLowerCase());
+    if (cv) return { key: cv.key, value: describeConsoleValue(cv, cfg!.condition), source: 'console' as const };
     if (latest && key in latest.prefs) return { key, value: latest.prefs[key], source: 'prefs' as const };
     if (latest && key in latest.checklist) return { key, value: latest.checklist[key], source: 'checklist' as const };
     return { key, value: null, source: null };
@@ -695,8 +754,17 @@ function buildNotes(
   keyLookups: readonly KeyLookupNote[],
   logWarnings: readonly LogWarning[],
   rowKeys: ReadonlyMap<number, RowKeys>,
+  cfg: ConsoleConfig | undefined,
 ): string[] {
   const notes: string[] = [];
+  if (cfg) {
+    const t = cfg.templateVersion;
+    notes.push(
+      `Trạng thái bật/tắt lấy từ console: project ${cfg.projectId}, condition ${cfg.condition} (key không có giá trị riêng thì dùng default)` +
+        `${t ? `, template version ${t.number} cập nhật ${t.updateTime || '?'} (UTC); nếu template được sửa sau lúc test thì kết quả có thể khác` : ''}. ` +
+        'Giá trị key trong log không dùng để xác định bug (D-097, D-101).',
+    );
+  }
   if (logWarnings.length > 0) {
     const sample = logWarnings
       .slice(0, 3)
@@ -708,6 +776,14 @@ function buildNotes(
     notes.push('Log không có khối CONFIG: không kiểm được ID theo FO CONFIG CHECKLIST và key bật/tắt.');
   } else if (log.config.snapshots.length > 1) {
     notes.push(`Log có ${log.config.snapshots.length} lần in CONFIG (app khởi động lại): key bật/tắt tính theo lần in gần nhất trước mỗi event.`);
+  }
+  if (cfg) {
+    const unmapped = rows.filter((r) => !r.special && !rowKeys.get(r.row.row)!.complete && !(rowKeys.get(r.row.row)!.manual ?? []).length).length;
+    const manual = rows.filter((r) => !r.special && (rowKeys.get(r.row.row)!.manual ?? []).length > 0).length;
+    if (unmapped > 0) notes.push(`${unmapped} ad chưa có đủ key hoặc key không có trên console: kiểm tra cần key là NA, xem mục mapping key trong report.`);
+    if (manual > 0) notes.push(`${manual} ad có key không phải true/false: tool không tự kiểm, tester test thủ công (D-099).`);
+    if (script.warnings.length > 0) notes.push(`Kịch bản có ${script.warnings.length} cảnh báo khi đọc (xem read_ad_script).`);
+    return notes;
   }
   const inApp = rows.filter((r) => r.row.enableKeySource === 'ads_name' && !r.special).length;
   if (inApp > 0) {

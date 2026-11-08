@@ -1,4 +1,5 @@
 import { ToolError } from './errors.js';
+import { mapKeysFiles, MAP_ROWS_MAX, type MapRemoteKeysResult } from './key-map-tool.js';
 import { verifyFiles, type VerifyAdsResult } from './verify-tool.js';
 import {
   SCRIPT_LIMIT_DEFAULT,
@@ -143,6 +144,8 @@ export async function runVerifyAds(args: Record<string, unknown>): Promise<ToolO
   const acceptanceSheet = optString(args.acceptance_sheet, 'acceptance_sheet', 200);
   const acceptancePath = optString(args.acceptance_path, 'acceptance_path', 4096);
   const outDir = optString(args.out_dir, 'out_dir', 4096);
+  const firebaseProjectId = optString(args.firebase_project_id, 'firebase_project_id', 30);
+  const version = optString(args.version, 'version', 40);
 
   return verifyFiles({
     logPath: args.log_path,
@@ -151,6 +154,33 @@ export async function runVerifyAds(args: Record<string, unknown>): Promise<ToolO
     acceptancePath,
     acceptanceSheet,
     outDir,
+    firebaseProjectId,
+    version,
+    keyOverrides: args.key_overrides ?? undefined,
+  });
+}
+
+// ------------------------------------------------------------ map_remote_keys
+
+export async function runMapRemoteKeys(args: Record<string, unknown>): Promise<ToolOutput<MapRemoteKeysResult>> {
+  const sheet = optString(args.sheet, 'sheet', 200);
+  const acceptanceSheet = optString(args.acceptance_sheet, 'acceptance_sheet', 200);
+  const acceptancePath = optString(args.acceptance_path, 'acceptance_path', 4096);
+  const outDir = optString(args.out_dir, 'out_dir', 4096);
+  const firebaseProjectId = optString(args.firebase_project_id, 'firebase_project_id', 30);
+  const version = optString(args.version, 'version', 40);
+  if (firebaseProjectId === undefined || version === undefined) {
+    throw new ToolError('Cần firebase_project_id và version (versionName của bản đang test, ví dụ "1.2.3").');
+  }
+  return mapKeysFiles({
+    xlsxPath: args.xlsx_path,
+    sheet,
+    acceptancePath,
+    acceptanceSheet,
+    outDir,
+    firebaseProjectId,
+    version,
+    keyOverrides: args.key_overrides ?? undefined,
   });
 }
 
@@ -220,8 +250,27 @@ export const TOOLS: readonly ToolInfo[] = [
       'acceptance_path?': 'string, đường dẫn tuyệt đối tới file nghiệm thu lib (để trích mô tả case đặc biệt)',
       'acceptance_sheet?': 'string, tên sheet nghiệm thu (mặc định là sheet hiện duy nhất)',
       'out_dir?': 'string, thư mục ghi report (mặc định là thư mục chứa file log)',
+      'firebase_project_id?': 'string, Firebase project id; có thì trạng thái bật/tắt lấy từ console (đi cùng version)',
+      'version?': 'string, versionName của bản đang test, ví dụ 1.2.3 (chọn condition Tester_<version>)',
+      'key_overrides?': 'object {"<dòng kịch bản>": ["key", ...]}, phần tester sửa ở bảng mapping',
     },
     run: runVerifyAds,
+  },
+  {
+    name: 'map_remote_keys',
+    description:
+      'Dựng bảng mapping key remote cho từng ad trong sheet kịch bản (kịch bản, file nghiệm thu, rồi suy theo tên) kèm giá trị trên Firebase theo condition Tester_<version>. Tester duyệt bảng trước khi verify. Ghi key-map-*.md.',
+    params: {
+      xlsx_path: 'string, đường dẫn tuyệt đối tới file kịch bản .xlsx hoặc .xlsm',
+      firebase_project_id: 'string, Firebase project id, ví dụ aap884-drama-short',
+      version: 'string, versionName của bản đang test, ví dụ 1.2.3',
+      'sheet?': 'string, tên sheet kịch bản (bắt buộc khi file có nhiều sheet)',
+      'acceptance_path?': 'string, đường dẫn tuyệt đối tới file nghiệm thu lib (để tra key)',
+      'acceptance_sheet?': 'string, tên sheet nghiệm thu (mặc định là sheet hiện duy nhất)',
+      'key_overrides?': 'object {"<dòng kịch bản>": ["key", ...]}, phần tester sửa',
+      'out_dir?': `string, thư mục ghi report (mặc định là thư mục chứa file kịch bản); trả tối đa ${MAP_ROWS_MAX} dòng`,
+    },
+    run: runMapRemoteKeys,
   },
 ];
 

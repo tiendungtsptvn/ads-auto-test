@@ -1,3 +1,5 @@
+import { consolePrefs, manualKeys } from './key-map.js';
+import { describeConsoleValue } from './remote-config.js';
 const AD_ID_RE = /^ca-app-pub-\d+\/\d+$/;
 const TIMELINE_MAX = 15;
 const EVIDENCE_MAX = 5;
@@ -62,10 +64,10 @@ function snapshotAt(snaps, time) {
     return pick;
 }
 /** Trạng thái qua mọi lần in CONFIG: chỉ kết luận khi mọi lần đều như nhau. */
-function overallState(stateAt, snaps) {
-    if (snaps.length === 0)
+function overallState(stateAt, prefsList) {
+    if (prefsList.length === 0)
         return 'unknown';
-    const states = snaps.map((s) => stateAt(s.prefs));
+    const states = prefsList.map(stateAt);
     if (states.every((s) => s === 'disabled'))
         return 'disabled';
     if (states.every((s) => s === 'enabled'))
@@ -180,9 +182,15 @@ export function highFloorViolations(hf, normal) {
 }
 // ------------------------------------------------------------ đối chiếu chính
 export function verifyAds(input) {
-    const { script, log, acceptance } = input;
+    const { script, log, acceptance, console: cfg } = input;
     const snaps = log.config.snapshots;
     const latest = snaps[snaps.length - 1];
+    // Nguồn trạng thái bật/tắt: console (cố định trong cả lần test) hoặc các lần in CONFIG của log
+    const fromConsole = cfg !== undefined;
+    const cPrefs = cfg ? consolePrefs(cfg) : undefined;
+    const prefsList = cPrefs ? [cPrefs] : snaps.map((s) => s.prefs);
+    const prefsAt = (time) => cPrefs ?? snapshotAt(snaps, time)?.prefs;
+    const prefsLabel = cfg ? `console (condition ${cfg.condition} hoặc default)` : 'Remote FO Prefs của log';
     const byId = new Map();
     for (const ev of log.ads.events) {
         let list = byId.get(ev.id);
@@ -195,7 +203,20 @@ export function verifyAds(input) {
     // ---- key bật/tắt của từng dòng; dòng có resource mà không ghi key thì tra file nghiệm thu (D-083)
     const keyLookups = [];
     const rowKeys = new Map();
+    const mapByRow = new Map((input.keyMap ?? []).map((m) => [m.row, m]));
     for (const row of script.rows) {
+        if (fromConsole) {
+            // M4: key lấy từ bảng mapping đã duyệt (D-098, D-104)
+            const m = mapByRow.get(row.row);
+            const manual = m ? manualKeys(m) : [];
+            rowKeys.set(row.row, {
+                keys: m ? m.keys.map((k) => k.key) : [],
+                complete: m ? m.complete && manual.length === 0 && m.keys.length > 0 : false,
+                missing: m ? (m.keys.length === 0 && m.notes.length === 0 ? ['chưa có key trong bảng mapping'] : m.notes) : ['dòng không có trong bảng mapping'],
+                manual,
+            });
+            continue;
+        }
         const extra = row.special?.enableKeys ?? [];
         let rk;
         if (row.enableKeySource === 'sheet') {
@@ -236,8 +257,8 @@ export function verifyAds(input) {
         list.push(row);
     }
     const idStateAt = (id, prefs) => combine((rowsById.get(id) ?? []).map((r) => keyState(keysOf(r), prefs)));
-    const idOverall = (id) => overallState((p) => idStateAt(id, p), snaps);
-    const rowOverall = (row) => overallState((p) => keyState(keysOf(row), p), snaps);
+    const idOverall = (id) => overallState((p) => idStateAt(id, p), prefsList);
+    const rowOverall = (row) => overallState((p) => keyState(keysOf(row), p), prefsList);
     const sharedWith = (row) => (rowsById.get(row.adsId) ?? []).filter((r) => r.row !== row.row).map((r) => r.row);
     // ---- kiểm tra theo dòng
     const checkId = (row) => {
@@ -280,13 +301,16 @@ export function verifyAds(input) {
             const c = (k) => evs.filter((e) => e.kind === k).length;
             return { ...base, status: 'OK', message: `có trong log: ${c('load_start')} lần load, ${c('load_fail')} fail, ${c('show')} show` };
         }
-        const { keys, missing } = keysOf(row);
+        const { keys, missing, manual = [] } = keysOf(row);
         if (idOverall(row.adsId) === 'disabled') {
-            return { ...base, status: 'OK', message: `vắng mặt đúng vì key ${keys.join(', ')} = false (D-073)` };
+            return { ...base, status: 'OK', message: `vắng mặt đúng vì key ${keys.join(', ')} = false (${fromConsole ? 'console, D-102' : 'D-073'})` };
         }
         // D-065: vắng mặt là FAIL; gợi ý thêm vì D-073 cho phép vắng mặt khi key = false
         const state = rowOverall(row);
-        const hint = row.enableKeySource === 'ads_name'
+        if (manual.length > 0 && state !== 'enabled') {
+            return { ...base, status: 'REVIEW', message: `không thấy trong log; key ${manual.join(', ')} không phải true/false, test thủ công (D-099)` };
+        }
+        const hint = !fromConsole && row.enableKeySource === 'ads_name'
             ? ' (key ad in-app chưa biết, cần console M4: nếu key = false thì vắng mặt là đúng)'
             : keys.length === 0
                 ? ` (${missing[0] ?? 'kịch bản không ghi key bật/tắt'})`
@@ -294,7 +318,7 @@ export function verifyAds(input) {
                     ? ` (key ${keys.join(', ')} = true)`
                     : state === 'disabled'
                         ? ` (key ${keys.join(', ')} = false nhưng ID dùng chung với dòng ${sharedWith(row).join(', ')} chưa tắt, D-088)`
-                        : ` (chưa chắc key ${keys.join(', ')} bật hay tắt trong log${missing.length > 0 ? `; ${missing[0]}` : ''})`;
+                        : ` (chưa chắc key ${keys.join(', ')} bật hay tắt trong ${fromConsole ? 'console' : 'log'}${missing.length > 0 ? `; ${missing[0]}` : ''})`;
         return { ...base, status: 'FAIL', message: `không thấy trong log${hint}` };
     };
     const checkType = (row) => {
@@ -332,26 +356,31 @@ export function verifyAds(input) {
             return {
                 ...base,
                 status: 'NA',
-                message: row.enableKeySource === 'ads_name'
+                message: !fromConsole && row.enableKeySource === 'ads_name'
                     ? 'chưa kiểm, cần console (key ad in-app lấy từ Firebase, M4)'
                     : (rk.missing.join('; ') || 'kịch bản không ghi key bật/tắt'),
             };
         }
-        if (!keys.some((k) => snaps.some((s) => k in s.prefs))) {
-            return { ...base, status: 'NA', message: `key ${keys.join(', ')} không có trong Remote FO Prefs của log` };
+        if (!keys.some((k) => prefsList.some((p) => k in p))) {
+            return {
+                ...base,
+                status: 'NA',
+                message: rk.manual && rk.manual.length > 0 ? `key ${rk.manual.join(', ')} không phải true/false, test thủ công (D-099)` : `key ${keys.join(', ')} không có trong ${prefsLabel}`,
+            };
         }
         // D-085: key = false thì ID không được load và không được show; trạng thái gộp theo ID (D-088)
         const violations = evs
             .filter((ev) => ev.kind === 'load_start' || ev.kind === 'show')
-            .filter((ev) => idStateAt(row.adsId, snapshotAt(snaps, ev.time)?.prefs) === 'disabled')
+            .filter((ev) => idStateAt(row.adsId, prefsAt(ev.time)) === 'disabled')
             .map((ev) => `${ev.kind === 'show' ? 'show' : 'load'} lúc ${fmt(ev)} khi key ${keys.join(', ')} = false`);
         if (violations.length > 0) {
             return { ...base, status: 'FAIL', message: `key ${keys.join(', ')} = false nhưng ID vẫn được load hoặc show (${violations.length} lần)`, evidence: sampleEvidence(violations) };
         }
-        if (!rk.complete && !snaps.some((s) => keyState(rk, s.prefs) === 'enabled')) {
+        if (!rk.complete && !prefsList.some((p) => keyState(rk, p) === 'enabled')) {
             return { ...base, status: 'NA', message: `chưa đủ key để kết luận: ${rk.missing.join('; ')}` };
         }
-        const shown = keys.map((k) => `${k}=${latest?.prefs[k] ?? '?'}`).join(', ');
+        const lastPrefs = prefsList[prefsList.length - 1];
+        const shown = keys.map((k) => `${k}=${lastPrefs?.[k] ?? '?'}`).join(', ');
         const shared = rowOverall(row) === 'disabled' && idOverall(row.adsId) !== 'disabled'
             ? `; key tắt nhưng ID dùng chung với dòng ${sharedWith(row).join(', ')} chưa tắt nên không kết luận theo dòng này (D-088)`
             : '';
@@ -413,7 +442,7 @@ export function verifyAds(input) {
                         : { ...base, status: 'FAIL', message: `${offName} có key = false nhưng vẫn được load hoặc show (${pairText})`, evidence: sampleEvidence(violations) };
             }
             else {
-                const inApp = hf.enableKeySource === 'ads_name' || normal.enableKeySource === 'ads_name';
+                const inApp = !fromConsole && (hf.enableKeySource === 'ads_name' || normal.enableKeySource === 'ads_name');
                 const missing = [...keysOf(hf).missing, ...keysOf(normal).missing];
                 check = {
                     ...base,
@@ -422,7 +451,9 @@ export function verifyAds(input) {
                         ? 'chưa kiểm, cần console (key ad in-app lấy từ Firebase, M4)'
                         : missing.length > 0
                             ? `chưa biết key bật/tắt của cặp: ${missing.join('; ')}`
-                            : 'chưa biết key bật/tắt của cặp (không có trong Remote FO Prefs của log, hoặc đổi giữa các lần in CONFIG)',
+                            : fromConsole
+                                ? 'chưa biết key bật/tắt của cặp (key không có trên console)'
+                                : 'chưa biết key bật/tắt của cặp (không có trong Remote FO Prefs của log, hoặc đổi giữa các lần in CONFIG)',
                 };
             }
         }
@@ -442,7 +473,7 @@ export function verifyAds(input) {
     // ---- chốt trạng thái; case đặc biệt luôn là CẦN XEM (D-075)
     for (const v of rows) {
         if (v.row.special) {
-            v.special = buildSpecial(v, script, snaps, eventsOf, acceptance);
+            v.special = buildSpecial(v, script, snaps, eventsOf, acceptance, cfg);
             v.status = 'REVIEW';
         }
         else {
@@ -483,11 +514,17 @@ export function verifyAds(input) {
         pairs,
         keyLookups,
         logWarnings,
-        notes: buildNotes(script, log, rows, acceptance, keyLookups, logWarnings, rowKeys),
+        notes: buildNotes(script, log, rows, acceptance, keyLookups, logWarnings, rowKeys, cfg),
+        ...(cfg
+            ? {
+                console: { projectId: cfg.projectId, version: cfg.version, condition: cfg.condition, templateVersion: cfg.templateVersion },
+                keyMap: input.keyMap ?? [],
+            }
+            : {}),
     };
 }
 // ------------------------------------------------------------ case đặc biệt (D-075, D-076, D-070)
-function buildSpecial(v, script, snaps, eventsOf, acceptance) {
+function buildSpecial(v, script, snaps, eventsOf, acceptance, cfg) {
     const row = v.row;
     const sp = row.special;
     const latest = snaps[snaps.length - 1];
@@ -513,6 +550,9 @@ function buildSpecial(v, script, snaps, eventsOf, acceptance) {
         ...sp.identifiers.filter((i) => !i.endsWith('*')),
     ];
     const keyValues = [...new Set(names)].map((key) => {
+        const cv = cfg?.values.get(key.toLowerCase());
+        if (cv)
+            return { key: cv.key, value: describeConsoleValue(cv, cfg.condition), source: 'console' };
         if (latest && key in latest.prefs)
             return { key, value: latest.prefs[key], source: 'prefs' };
         if (latest && key in latest.checklist)
@@ -560,8 +600,14 @@ function mixComparisons(row, script, latest) {
     }
     return out;
 }
-function buildNotes(script, log, rows, acceptance, keyLookups, logWarnings, rowKeys) {
+function buildNotes(script, log, rows, acceptance, keyLookups, logWarnings, rowKeys, cfg) {
     const notes = [];
+    if (cfg) {
+        const t = cfg.templateVersion;
+        notes.push(`Trạng thái bật/tắt lấy từ console: project ${cfg.projectId}, condition ${cfg.condition} (key không có giá trị riêng thì dùng default)` +
+            `${t ? `, template version ${t.number} cập nhật ${t.updateTime || '?'} (UTC); nếu template được sửa sau lúc test thì kết quả có thể khác` : ''}. ` +
+            'Giá trị key trong log không dùng để xác định bug (D-097, D-101).');
+    }
     if (logWarnings.length > 0) {
         const sample = logWarnings
             .slice(0, 3)
@@ -574,6 +620,17 @@ function buildNotes(script, log, rows, acceptance, keyLookups, logWarnings, rowK
     }
     else if (log.config.snapshots.length > 1) {
         notes.push(`Log có ${log.config.snapshots.length} lần in CONFIG (app khởi động lại): key bật/tắt tính theo lần in gần nhất trước mỗi event.`);
+    }
+    if (cfg) {
+        const unmapped = rows.filter((r) => !r.special && !rowKeys.get(r.row.row).complete && !(rowKeys.get(r.row.row).manual ?? []).length).length;
+        const manual = rows.filter((r) => !r.special && (rowKeys.get(r.row.row).manual ?? []).length > 0).length;
+        if (unmapped > 0)
+            notes.push(`${unmapped} ad chưa có đủ key hoặc key không có trên console: kiểm tra cần key là NA, xem mục mapping key trong report.`);
+        if (manual > 0)
+            notes.push(`${manual} ad có key không phải true/false: tool không tự kiểm, tester test thủ công (D-099).`);
+        if (script.warnings.length > 0)
+            notes.push(`Kịch bản có ${script.warnings.length} cảnh báo khi đọc (xem read_ad_script).`);
+        return notes;
     }
     const inApp = rows.filter((r) => r.row.enableKeySource === 'ads_name' && !r.special).length;
     if (inApp > 0) {

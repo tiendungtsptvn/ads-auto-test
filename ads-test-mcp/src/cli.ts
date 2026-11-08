@@ -28,6 +28,8 @@ import {
  *   node dist/cli.js search --log <path> [--tag T] [--text S] [--ad-id ID] [--limit N] [--cursor C]
  *   node dist/cli.js script --xlsx <path> [--sheet S] [--phase P] [--offset N] [--limit N]
  *   node dist/cli.js verify --log <path> --xlsx <path> [--sheet S] [--acceptance P] [--acceptance-sheet S] [--out-dir D]
+ *                           [--project ID --version V [--overrides JSON]]
+ *   node dist/cli.js keys   --xlsx <path> --project ID --version V [--sheet S] [--acceptance P] [--overrides JSON] [--out-dir D]
  */
 
 const USAGE = `Cách dùng:
@@ -40,6 +42,9 @@ const USAGE = `Cách dùng:
   node dist/cli.js search --log <đường dẫn> [--tag T] [--text S] [--ad-id ID] [--limit N] [--cursor C]
   node dist/cli.js script --xlsx <đường dẫn> [--sheet S] [--phase P] [--offset N] [--limit N]
   node dist/cli.js verify --log <đường dẫn> --xlsx <đường dẫn> [--sheet S] [--acceptance P] [--acceptance-sheet S] [--out-dir D]
+                          [--project <firebase project id> --version <versionName> [--overrides '{"12":["key"]}']]
+  node dist/cli.js keys   --xlsx <đường dẫn> --project <firebase project id> --version <versionName> [--sheet S]
+                          [--acceptance P] [--acceptance-sheet S] [--overrides '{"12":["key"]}'] [--out-dir D]
 Tùy chọn chung:
   --protocol legacy|modern   cách nói chuyện với server MCP (mặc định legacy: handshake initialize)
   --direct                   gọi thẳng core, không qua server MCP
@@ -93,6 +98,9 @@ const VALUE_FLAGS = new Set([
   'acceptance',
   'acceptance-sheet',
   'out-dir',
+  'project',
+  'version',
+  'overrides',
 ]);
 const BOOL_FLAGS = new Set(['config']);
 
@@ -125,6 +133,11 @@ function num(f: Map<string, string | true>, k: string): number | undefined {
   if (v === undefined) return undefined;
   if (!/^\d{1,9}$/.test(v)) throw new ToolError(`--${k} phải là số nguyên không âm.`);
   return Number(v);
+}
+
+function overridesFlag(f: Map<string, string | true>): Record<string, unknown> | undefined {
+  const raw = str(f, 'overrides');
+  return raw === undefined ? undefined : parseJsonArgs(raw);
 }
 
 function parseJsonArgs(raw: string | undefined): Record<string, unknown> {
@@ -308,7 +321,7 @@ async function run(): Promise<number> {
     if (!name || extra.length > 0) throw new ToolError(`Cú pháp: call <tool_name> '<json-args>'\n${USAGE}`);
     toolName = name;
     toolArgs = parseJsonArgs(rawArgs);
-  } else if (cmd === 'parse' || cmd === 'search' || cmd === 'script' || cmd === 'verify') {
+  } else if (cmd === 'parse' || cmd === 'search' || cmd === 'script' || cmd === 'verify' || cmd === 'keys') {
     const flags = parseFlags(args);
     if (cmd === 'parse') {
       toolName = 'parse_logcat';
@@ -337,6 +350,21 @@ async function run(): Promise<number> {
         sheet: str(flags, 'sheet'),
         acceptance_path: str(flags, 'acceptance'),
         acceptance_sheet: str(flags, 'acceptance-sheet'),
+        out_dir: str(flags, 'out-dir'),
+        firebase_project_id: str(flags, 'project'),
+        version: str(flags, 'version'),
+        key_overrides: overridesFlag(flags),
+      };
+    } else if (cmd === 'keys') {
+      toolName = 'map_remote_keys';
+      toolArgs = {
+        xlsx_path: str(flags, 'xlsx'),
+        firebase_project_id: str(flags, 'project'),
+        version: str(flags, 'version'),
+        sheet: str(flags, 'sheet'),
+        acceptance_path: str(flags, 'acceptance'),
+        acceptance_sheet: str(flags, 'acceptance-sheet'),
+        key_overrides: overridesFlag(flags),
         out_dir: str(flags, 'out-dir'),
       };
     } else {

@@ -1,3 +1,4 @@
+import { type MapRemoteKeysResult } from './key-map-tool.js';
 import { type VerifyAdsResult } from './verify-tool.js';
 import { type ReadAdScriptResult } from './script-tool.js';
 import { AD_LIMIT_DEFAULT, SEARCH_LIMIT_DEFAULT, type ParseLogcatResult, type SearchLogcatResult } from './summary.js';
@@ -16,6 +17,7 @@ export declare function runParseLogcat(args: Record<string, unknown>): ToolOutpu
 export declare function runSearchLogcat(args: Record<string, unknown>): ToolOutput<SearchLogcatResult>;
 export declare function runReadAdScript(args: Record<string, unknown>): Promise<ToolOutput<ReadAdScriptResult>>;
 export declare function runVerifyAds(args: Record<string, unknown>): Promise<ToolOutput<VerifyAdsResult>>;
+export declare function runMapRemoteKeys(args: Record<string, unknown>): Promise<ToolOutput<MapRemoteKeysResult>>;
 export interface ToolInfo {
     name: string;
     description: string;

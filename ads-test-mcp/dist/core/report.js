@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { ToolError } from './errors.js';
+import { describeConsoleValue } from './remote-config.js';
 const CHECK_LABEL = {
     id: 'Đúng ID',
     present: 'Đủ ad',
@@ -25,7 +26,7 @@ export function md(s, max = 200, keepBreaks = false) {
         .trim();
     return clean.length > max ? `${clean.slice(0, max)}...` : clean;
 }
-const code = (s, max = 100) => `\`${md(s, max).replace(/\\\|/g, '|')}\``;
+export const code = (s, max = 100) => `\`${md(s, max).replace(/\\\|/g, '|')}\``;
 function counts(rows) {
     const c = { OK: 0, FAIL: 0, REVIEW: 0 };
     for (const r of rows)
@@ -66,6 +67,16 @@ export function renderReport(result, meta) {
         L.push(`acceptance_file: ${JSON.stringify(meta.acceptanceFile)}`);
         L.push(`acceptance_sheet: ${JSON.stringify(meta.acceptanceSheet ?? '')}`);
     }
+    if (result.console) {
+        L.push(`firebase_project: ${JSON.stringify(result.console.projectId)}`);
+        L.push(`app_version: ${JSON.stringify(result.console.version)}`);
+        L.push(`rc_condition: ${JSON.stringify(result.console.condition)}`);
+        if (result.console.templateVersion) {
+            L.push(`rc_template_version: ${JSON.stringify(result.console.templateVersion.number)}`);
+            L.push(`rc_template_updated: ${JSON.stringify(result.console.templateVersion.updateTime)}`);
+        }
+    }
+    L.push(`key_source: ${result.console ? 'console' : 'log'}`);
     L.push(`ads: ${rows.length}`);
     L.push(`ok: ${c.OK}`);
     L.push(`fail: ${c.FAIL}`);
@@ -139,9 +150,10 @@ export function renderReport(result, meta) {
             }
         }
         if (s.keyValues.length > 0) {
-            L.push('- Giá trị key liên quan trong log (lần in CONFIG cuối):');
+            L.push(result.console ? '- Giá trị key liên quan (console, ID lấy từ log):' : '- Giá trị key liên quan trong log (lần in CONFIG cuối):');
+            const SRC = { prefs: 'Remote FO Prefs', checklist: 'FO CONFIG CHECKLIST', console: 'console' };
             for (const k of s.keyValues) {
-                L.push(`  - ${code(k.key)} = ${k.value === null ? '(không có trong log)' : code(k.value || '(trống)')}${k.source ? ` (${k.source === 'prefs' ? 'Remote FO Prefs' : 'FO CONFIG CHECKLIST'})` : ''}`);
+                L.push(`  - ${code(k.key)} = ${k.value === null ? '(không có trong log)' : code(k.value || '(trống)')}${k.source ? ` (${SRC[k.source]})` : ''}`);
             }
         }
         if (s.idComparisons.length > 0) {
@@ -202,6 +214,13 @@ export function renderReport(result, meta) {
         }
         L.push('');
     }
+    // ---- mapping key với console (M4, D-098)
+    if (result.console && result.keyMap) {
+        L.push(`## Mapping key remote (${result.keyMap.length})`, '');
+        L.push(`Trạng thái bật/tắt lấy từ console, condition ${code(result.console.condition)}; key không có giá trị riêng thì dùng default (prod). ` +
+            'Bảng này phải được tester duyệt trước khi kiểm (D-098).', '');
+        L.push(...keyMapTable(result.keyMap, result.console.condition), '');
+    }
     // ---- key tra từ file nghiệm thu (D-083)
     if (keyLookups.length > 0) {
         L.push(`## Key tra từ file nghiệm thu (${keyLookups.length})`, '');
@@ -238,6 +257,26 @@ export function renderReport(result, meta) {
     L.push('');
     return L.join('\n');
 }
+const SOURCE_LABEL = {
+    tester: 'tester sửa',
+    script: 'kịch bản',
+    acceptance: 'file nghiệm thu',
+    guess: 'suy theo tên',
+    special: 'case đặc biệt',
+};
+/** Bảng mapping key: một dòng cho mỗi ad, dùng chung cho report verify và report key-map. */
+export function keyMapTable(rows, condition) {
+    const L = ['| Dòng | Ads name | Resource | Key | Nguồn | Giá trị console | Ghi chú |', '|---|---|---|---|---|---|---|'];
+    for (const m of rows) {
+        const keys = m.keys.length > 0 ? m.keys.map((k) => code(k.key, 80)).join('<br>') : '-';
+        const src = m.keys.map((k) => `${SOURCE_LABEL[k.source]}${k.detail ? ` (${md(k.detail, 80)})` : ''}`).join('<br>') || '-';
+        const vals = m.keys.map((k) => (k.console ? md(describeConsoleValue(k.console, condition), 100) : 'không có trên console')).join('<br>') || '-';
+        const res = m.resources.map((r) => code(r, 60)).join('<br>') || '-';
+        const notes = [...(m.special ? ['case đặc biệt'] : []), ...m.notes].map((n) => md(n, 200)).join('; ') || '-';
+        L.push(`| ${m.row} | ${md(m.adsName || '(trống)', 50)} | ${res} | ${keys} | ${src} | ${vals} | ${notes} |`);
+    }
+    return L;
+}
 /** Kiểm tra thư mục đích: tuyệt đối, tồn tại, là thư mục thật (không phải symlink). */
 export function validateOutDir(raw) {
     if (typeof raw !== 'string' || raw.trim() === '' || raw.includes('\0')) {
@@ -263,8 +302,8 @@ export function validateOutDir(raw) {
  * Ghi report ra thư mục: ghi tạm trong cùng thư mục rồi liên kết sang tên cuối, nên không bao giờ ghi
  * đè file đã có (trùng tên thì thêm hậu tố -2, -3, ...). Trả về đường dẫn tuyệt đối của report.
  */
-export function writeReport(dir, content, now) {
-    const base = `ads-report-${stamp(now)}`;
+export function writeReport(dir, content, now, prefix = 'ads-report') {
+    const base = `${prefix}-${stamp(now)}`;
     const tmp = path.join(dir, `.${base}.${process.pid}.tmp`);
     try {
         fs.writeFileSync(tmp, content, { encoding: 'utf8', flag: 'wx', mode: 0o644 });

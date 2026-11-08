@@ -41,7 +41,9 @@ test('verify_ads: đếm OK, FAIL, CẦN XEM, ad thừa; FAIL có vị trí và 
   assert.equal(r.package, 'com.example.fakeapp');
   assert.equal(r.script.ads, 4);
   assert.equal(r.script.sheet, 'Phase 8');
-  assert.ok(text.split('\n').length <= 3);
+  assert.ok(text.split('\n').length <= 4);
+  assert.match(text, /lấy từ log \(chưa đối chiếu console\)/);
+  assert.deepEqual(r.key_source, { from: 'log' });
   assert.match(text, /OK 1, FAIL 2, CẦN XEM 1/);
   assert.match(text, /kết luận do tester quyết định/);
 });

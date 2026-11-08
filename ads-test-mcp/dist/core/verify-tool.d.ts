@@ -1,3 +1,4 @@
+import { type ConsoleArgs } from './key-map-tool.js';
 import { type CheckId } from './verify.js';
 export declare const FAIL_ITEMS_MAX = 20;
 export declare const NOTES_MAX = 5;
@@ -42,8 +43,14 @@ export interface VerifyAdsResult {
     };
     /** Các kiểm tra chưa thực hiện được và lưu ý (tối đa 5). */
     notes: string[];
+    /** Nguồn trạng thái bật/tắt: console (M4) hoặc log. */
+    key_source: {
+        from: 'console' | 'log';
+        firebase_project?: string;
+        condition?: string;
+    };
 }
-export interface VerifyFilesOptions {
+export interface VerifyFilesOptions extends ConsoleArgs {
     logPath: unknown;
     xlsxPath: unknown;
     sheet?: string;

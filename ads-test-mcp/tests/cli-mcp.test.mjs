@@ -163,7 +163,7 @@ test('session: một tiến trình phục vụ nhiều dòng, lỗi một dòng 
     const out = r.out.trim().split('\n').map((l) => JSON.parse(l));
     assert.equal(out.length, 6, proto);
     assert.equal(out[0].ok, true);
-    assert.deepEqual(out[0].result.map((t) => t.name), ['parse_logcat', 'search_logcat', 'read_ad_script', 'verify_ads']);
+    assert.deepEqual(out[0].result.map((t) => t.name), ['parse_logcat', 'search_logcat', 'read_ad_script', 'verify_ads', 'map_remote_keys']);
     assert.equal(out[1].result.structuredContent.lib_version, '5.5.5');
     assert.equal(out[2].ok, true);
     assert.equal(out[2].result.isError, true);
@@ -189,7 +189,7 @@ test('connect: dùng thư viện trực tiếp, close() dọn sạch tiến trì
     const c = await connect({ protocol });
     assert.equal(c.serverInfo()?.name, 'ads-test-mcp');
     const tools = await c.listTools();
-    assert.equal(tools.length, 4);
+    assert.equal(tools.length, 5);
     assert.ok('log_path' in describeParams(tools[0].inputSchema));
     const res = await c.callTool('search_logcat', { log_path: logFile(), limit: 1 });
     assert.ok(!res.isError);

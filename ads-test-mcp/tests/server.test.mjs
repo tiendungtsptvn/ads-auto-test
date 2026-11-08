@@ -33,13 +33,16 @@ const logFile = () =>
 test('tools/list: đủ tool, có inputSchema, outputSchema và annotation chỉ đọc', async () => {
   await withClient(async (client) => {
     const { tools } = await client.listTools();
-    assert.deepEqual(tools.map((t) => t.name).sort(), ['parse_logcat', 'read_ad_script', 'search_logcat', 'verify_ads']);
+    assert.deepEqual(tools.map((t) => t.name).sort(), ['map_remote_keys', 'parse_logcat', 'read_ad_script', 'search_logcat', 'verify_ads']);
     for (const t of tools) {
       assert.equal(t.inputSchema.type, 'object');
       assert.ok(t.inputSchema.required.length >= 1);
       assert.ok(t.outputSchema, `${t.name} thiếu outputSchema`);
-      // verify_ads ghi file report mới (không bao giờ ghi đè); các tool còn lại chỉ đọc
-      assert.equal(t.annotations.readOnlyHint, t.name !== 'verify_ads', `${t.name}: readOnlyHint`);
+      // verify_ads và map_remote_keys ghi file report mới (không bao giờ ghi đè); các tool còn lại chỉ đọc
+      const writesReport = t.name === 'verify_ads' || t.name === 'map_remote_keys';
+      assert.equal(t.annotations.readOnlyHint, !writesReport, `${t.name}: readOnlyHint`);
+      // Hai tool này có thể đọc Firebase (M4) nên là open world
+      assert.equal(t.annotations.openWorldHint, writesReport, `${t.name}: openWorldHint`);
       assert.equal(t.annotations.destructiveHint, false);
     }
   });

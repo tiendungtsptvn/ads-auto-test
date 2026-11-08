@@ -1,6 +1,8 @@
 import { type AdEvent } from './ad-events.js';
 import { type AdScript, type AdScriptRow } from './ad-script.js';
 import { type Acceptance, type AcceptanceExcerpt, type KeyLookup } from './acceptance.js';
+import { type RowKeyMap } from './key-map.js';
+import { type ConsoleConfig } from './remote-config.js';
 import { type LoadedLog } from './summary.js';
 /**
  * Đối chiếu log với kịch bản (M3). Rule: D-063 đến D-077, bảng "Các kiểm tra" trong mvp.md.
@@ -21,7 +23,7 @@ export interface Check {
 export interface KeyValue {
     key: string;
     value: string | null;
-    source: 'prefs' | 'checklist' | null;
+    source: 'prefs' | 'checklist' | 'console' | null;
 }
 export interface SpecialDetail {
     name: string;
@@ -81,6 +83,16 @@ export interface LogWarning {
         adsName: string;
     }>;
 }
+/** Nguồn trạng thái bật/tắt khi đọc từ console (M4, D-097). */
+export interface ConsoleInfo {
+    projectId: string;
+    version: string;
+    condition: string;
+    templateVersion: {
+        number: string;
+        updateTime: string;
+    } | null;
+}
 export interface VerifyResult {
     rows: RowVerdict[];
     extras: ExtraId[];
@@ -88,12 +100,21 @@ export interface VerifyResult {
     keyLookups: KeyLookupNote[];
     logWarnings: LogWarning[];
     notes: string[];
+    /** Có khi trạng thái key lấy từ console (M4). */
+    console?: ConsoleInfo;
+    keyMap?: RowKeyMap[];
 }
 export interface VerifyInput {
     script: AdScript;
     log: LoadedLog;
     /** Có file nghiệm thu hay không; `acceptance` chỉ có khi đã đọc được. */
     acceptance?: Acceptance;
+    /**
+     * Remote Config trên console và bảng mapping key đã duyệt (M4). Khi có thì trạng thái bật/tắt lấy từ console
+     * thay cho khối Remote FO Prefs của log (D-097, D-101).
+     */
+    console?: ConsoleConfig;
+    keyMap?: RowKeyMap[];
 }
 /**
  * Dòng load ok hoặc fail lẻ: không có dòng "starting load" nào đang chờ kết quả (D-086). Đếm số lần bắt đầu

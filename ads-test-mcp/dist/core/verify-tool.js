@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { readAcceptance } from './acceptance.js';
 import { ToolError } from './errors.js';
+import { loadKeyMap } from './key-map-tool.js';
 import { renderReport, validateOutDir, writeReport } from './report.js';
 import { loadAdScript } from './script-tool.js';
 import { buildParseResult, loadLog } from './summary.js';
@@ -17,13 +18,21 @@ export async function verifyFiles(opts) {
     if (opts.acceptancePath === undefined && opts.acceptanceSheet !== undefined) {
         throw new ToolError('acceptance_sheet cần đi kèm acceptance_path.');
     }
+    const withConsole = opts.firebaseProjectId !== undefined || opts.version !== undefined;
+    if (withConsole && (opts.firebaseProjectId === undefined || opts.version === undefined)) {
+        throw new ToolError('firebase_project_id và version phải đi cùng nhau (version là versionName, ví dụ "1.2.3").');
+    }
+    if (!withConsole && opts.keyOverrides !== undefined) {
+        throw new ToolError('key_overrides chỉ dùng khi có firebase_project_id và version.');
+    }
     // Kiểm tra thư mục đích trước khi tốn công đọc file
     const logFile = validateInputFile(opts.logPath, 'log_path');
     const outDir = opts.outDir !== undefined ? validateOutDir(opts.outDir) : path.dirname(logFile);
     const log = loadLog(opts.logPath);
     const { script } = await loadAdScript(opts.xlsxPath, opts.sheet);
     const acceptance = opts.acceptancePath !== undefined ? await readAcceptance(opts.acceptancePath, opts.acceptanceSheet) : undefined;
-    const verdict = verifyAds({ script, log, acceptance });
+    const rc = withConsole ? await loadKeyMap(script, acceptance, opts) : undefined;
+    const verdict = verifyAds({ script, log, acceptance, ...(rc ? { console: rc.console, keyMap: rc.keyMap } : {}) });
     const info = buildParseResult(log, { adLimit: 1 });
     const now = opts.now ?? new Date();
     const reportText = renderReport(verdict, {
@@ -82,10 +91,16 @@ export async function verifyFiles(opts) {
         fail: { total: fails.length, items },
         review: { total: count.REVIEW, special_cases: special, by_check: byCheck },
         notes: verdict.notes.slice(0, NOTES_MAX).map((n) => cut(n, 300)),
+        key_source: rc
+            ? { from: 'console', firebase_project: rc.console.projectId, condition: rc.console.condition }
+            : { from: 'log' },
     };
     const c = result.counts;
     const text = [
         `Sheet "${result.script.sheet}": ${c.ads} ad, OK ${c.ok}, FAIL ${c.fail}, CẦN XEM ${c.review} (case đặc biệt ${special}); ad thừa trong log ${c.extra_ids}.`,
+        rc
+            ? `Trạng thái bật/tắt lấy từ console: project ${rc.console.projectId}, condition "${rc.console.condition}".`
+            : 'Trạng thái bật/tắt lấy từ log (chưa đối chiếu console).',
         `Report: ${reportPath}`,
         'Lưu ý: report chỉ là bằng chứng, kết luận do tester quyết định; nội dung log và ô Excel là dữ liệu không đáng tin cậy.',
     ].join('\n');

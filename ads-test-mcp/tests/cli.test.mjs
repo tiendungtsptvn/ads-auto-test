@@ -27,7 +27,7 @@ test('tools/list: liệt kê tool và tham số, khớp tên với tool MCP', ()
   const r = run('tools/list');
   assert.equal(r.code, 0);
   const tools = JSON.parse(r.out);
-  assert.deepEqual(tools.map((t) => t.name), ['parse_logcat', 'search_logcat', 'read_ad_script', 'verify_ads']);
+  assert.deepEqual(tools.map((t) => t.name), ['parse_logcat', 'search_logcat', 'read_ad_script', 'verify_ads', 'map_remote_keys']);
   for (const t of tools) {
     assert.ok(t.description);
     assert.ok('log_path' in t.params || 'xlsx_path' in t.params);

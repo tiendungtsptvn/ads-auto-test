@@ -86,7 +86,7 @@ test('tools/list modern: resultType, ttlMs, cacheScope, serverInfo; tool vẫn �
   assert.ok(r.ttlMs >= 0);
   assert.ok(['public', 'private'].includes(r.cacheScope));
   assert.equal(r._meta[SERVER_INFO_KEY].name, 'ads-test-mcp');
-  assert.deepEqual(r.tools.map((t) => t.name), ['parse_logcat', 'search_logcat', 'read_ad_script', 'verify_ads']);
+  assert.deepEqual(r.tools.map((t) => t.name), ['parse_logcat', 'search_logcat', 'read_ad_script', 'verify_ads', 'map_remote_keys']);
   for (const t of r.tools) assert.ok(t.inputSchema && t.outputSchema);
 });
 
@@ -160,7 +160,7 @@ test('legacy: initialize rồi tools/list vẫn chạy như cũ, kết quả kh�
   assert.equal(res.get(1).result.resultType, undefined);
   assert.equal(res.get(2).result.resultType, undefined);
   assert.equal(res.get(2).result.ttlMs, undefined);
-  assert.equal(res.get(2).result.tools.length, 4);
+  assert.equal(res.get(2).result.tools.length, 5);
 });
 
 test('hai thế hệ xen kẽ trên cùng một tiến trình, mỗi phản hồi theo đúng thế hệ của request', async () => {
@@ -206,7 +206,7 @@ test('_meta khai version legacy thì phục vụ theo legacy, không thêm resul
     },
   ]);
   assert.equal(res.get(1).result.resultType, undefined);
-  assert.equal(res.get(1).result.tools.length, 4);
+  assert.equal(res.get(1).result.tools.length, 5);
 });
 
 test('id số và id chuỗi giống nhau không lẫn thế hệ', async () => {
